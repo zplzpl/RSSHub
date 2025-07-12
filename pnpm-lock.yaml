@@ -10454,7 +10454,7 @@ snapshots:
 
   linkedom@0.18.11:
     dependencies:
-      css-select: 5.1.0
+      css-select: 5.2.2
       cssom: 0.5.0
       html-escaper: 3.0.3
       htmlparser2: 10.0.0
