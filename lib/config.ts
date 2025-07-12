@@ -76,6 +76,7 @@ export type Config = {
         allow_user_hotlink_template: boolean;
         filter_regex_engine: string;
         allow_user_supply_unsafe_domain: boolean;
+        disable_nsfw: boolean;
     };
     suffix?: string;
     titleLengthLimit: number;
@@ -218,6 +219,9 @@ export type Config = {
     };
     lightnovel: {
         cookie?: string;
+    };
+    lofter: {
+        cookies?: string;
     };
     lorientlejour: {
         token?: string;
@@ -538,6 +542,7 @@ const calculateValue = () => {
             allow_user_hotlink_template: toBoolean(envs.ALLOW_USER_HOTLINK_TEMPLATE, false),
             filter_regex_engine: envs.FILTER_REGEX_ENGINE || 're2',
             allow_user_supply_unsafe_domain: toBoolean(envs.ALLOW_USER_SUPPLY_UNSAFE_DOMAIN, false),
+            disable_nsfw: toBoolean(envs.DISABLE_NSFW, false),
         },
         suffix: envs.SUFFIX,
         titleLengthLimit: toInt(envs.TITLE_LENGTH_LIMIT, 150),
@@ -680,6 +685,9 @@ const calculateValue = () => {
         },
         lightnovel: {
             cookie: envs.SECURITY_KEY,
+        },
+        lofter: {
+            cookies: envs.LOFTER_COOKIE,
         },
         lorientlejour: {
             token: envs.LORIENTLEJOUR_TOKEN,
