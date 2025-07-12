@@ -30,7 +30,7 @@ const handler = async (ctx) => {
         link: `https://x.com/${screen_name}`,
         image: profileImageUrl,
         description: userInfo.description,
-        item: utils.ProcessFeed(ctx, {
+        item: await utils.ProcessFeed(ctx, {
             data,
         }),
     };

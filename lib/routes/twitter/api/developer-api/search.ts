@@ -14,7 +14,7 @@ const handler = async (ctx) => {
     return {
         title: `Twitter Keyword - ${keyword}`,
         link: `https://x.com/search?q=${encodeURIComponent(keyword)}`,
-        item: utils.ProcessFeed(ctx, {
+        item: await utils.ProcessFeed(ctx, {
             data: data.statuses,
         }),
         allowEmpty: true,

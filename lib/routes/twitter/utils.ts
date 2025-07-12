@@ -3,6 +3,8 @@ import { config } from '@/config';
 import { TwitterApi } from 'twitter-api-v2';
 import { fallback, queryToBoolean, queryToInteger } from '@/utils/readable-social';
 import { parseDate } from '@/utils/parse-date';
+import api from './api';
+import cache from '@/utils/cache';
 
 const getQueryParams = (url) => URL.parse(url, true).query;
 const getOriginalImg = (url) => {
@@ -44,7 +46,34 @@ const formatText = (item) => {
     return text.trim().replaceAll('\n', '<br>');
 };
 
-const ProcessFeed = (ctx, { data = [] }, params = {}) => {
+const getReplyTweet = async (tweetId, repliedToUsername) => {
+    try {
+        const cacheKey = `twitter:reply-tweet:${tweetId}`;
+
+        // Try to get from cache first
+        const cachedResult = await cache.get(cacheKey);
+        if (cachedResult) {
+            return JSON.parse(cachedResult);
+        }
+
+        // Get user tweets and replies to find the specific tweet
+        const tweets = await api.getUserTweetsAndReplies(repliedToUsername);
+        const replyTweet = tweets?.find((tweet) => (tweet.id_str || tweet.conversation_id_str) === tweetId);
+
+        if (replyTweet) {
+            // Cache the result for 1 hour
+            await cache.set(cacheKey, JSON.stringify(replyTweet), 3600);
+            return replyTweet;
+        }
+
+        return null;
+    } catch {
+        // Silent fail - return null if we can't get the reply tweet
+        return null;
+    }
+};
+
+const ProcessFeed = async (ctx, { data = [] }, params = {}) => {
     // undefined and strings like "exclude_rts_replies" is also safely parsed, so no if branch is needed
     const routeParams = new URLSearchParams(ctx.req.param('routeParams'));
 
@@ -62,6 +91,7 @@ const ProcessFeed = (ctx, { data = [] }, params = {}) => {
         addLinkForPics: fallback(params.addLinkForPics, queryToBoolean(routeParams.get('addLinkForPics')), false),
         showTimestampInDescription: fallback(params.showTimestampInDescription, queryToBoolean(routeParams.get('showTimestampInDescription')), false),
         showQuotedInTitle: fallback(params.showQuotedInTitle, queryToBoolean(routeParams.get('showQuotedInTitle')), false),
+        showReplyContent: fallback(params.showReplyContent, queryToBoolean(routeParams.get('showReplyContent')), false),
 
         widthOfPics: fallback(params.widthOfPics, queryToInteger(routeParams.get('widthOfPics')), -1),
         heightOfPics: fallback(params.heightOfPics, queryToInteger(routeParams.get('heightOfPics')), -1),
@@ -86,6 +116,7 @@ const ProcessFeed = (ctx, { data = [] }, params = {}) => {
         addLinkForPics,
         showTimestampInDescription,
         showQuotedInTitle,
+        showReplyContent,
         mediaNumber,
         widthOfPics,
         heightOfPics,
@@ -199,142 +230,167 @@ const ProcessFeed = (ctx, { data = [] }, params = {}) => {
         return picsPrefix;
     };
 
-    return data.map((item) => {
-        const originalItem = item;
-        item = item.retweeted_status || item;
-        item.full_text = item.full_text || item.text;
-        item.full_text = formatText(item);
-        const img = formatMedia(item);
-        let picsPrefix = generatePicsPrefix(item);
-        let quote = '';
-        let quoteInTitle = '';
+    return await Promise.all(
+        data.map(async (item) => {
+            const originalItem = item;
+            item = item.retweeted_status || item;
+            item.full_text = item.full_text || item.text;
+            item.full_text = formatText(item);
+            const img = formatMedia(item);
+            let picsPrefix = generatePicsPrefix(item);
+            let quote = '';
+            let quoteInTitle = '';
 
-        // Make quote in description
-        if (item.is_quote_status) {
-            const quoteData = item.quoted_status;
+            // Make quote in description
+            if (item.is_quote_status) {
+                const quoteData = item.quoted_status;
 
-            if (quoteData) {
-                quoteData.full_text = quoteData.full_text || quoteData.text;
-                const author = quoteData.user;
-                quote += '<div class="rsshub-quote">';
-                if (readable) {
-                    quote += `<br clear='both' /><div style='clear: both'></div>`;
-                    quote += `<blockquote style='background: #80808010;border-top:1px solid #80808030;border-bottom:1px solid #80808030;margin:0;padding:5px 20px;'>`;
-                } else {
-                    quote += `<br><br>`;
-                }
-
-                if (readable) {
-                    quote += `<a href='https://x.com/${author.screen_name}' target='_blank' rel='noopener noreferrer'>`;
-                }
-
-                if (showQuotedAuthorAvatarInDesc) {
-                    quote += `<img width='${sizeOfQuotedAuthorAvatar}' height='${sizeOfQuotedAuthorAvatar}' src='${author.profile_image_url_https}' ${readable ? 'hspace="8" vspace="8" align="left"' : ''}>`;
-                }
-
-                if (authorNameBold) {
-                    quote += `<strong>`;
-                }
-
-                quote += author.name;
-
-                if (authorNameBold) {
-                    quote += `</strong>`;
-                }
-
-                if (readable) {
-                    quote += `</a>`;
-                }
-
-                quote += `:&ensp;`;
-                quote += formatText(quoteData);
-
-                if (!readable) {
-                    quote += '<br>';
-                }
-                quote += formatMedia(quoteData);
-                picsPrefix += generatePicsPrefix(quoteData);
-                quoteInTitle += showEmojiForRetweetAndReply ? ' 💬 ' : (showSymbolForRetweetAndReply ? ' RT ' : '');
-                quoteInTitle += `${author.name}: ${formatText(quoteData)}`;
-
-                if (readable) {
-                    quote += `<br><small>Link: <a href='https://x.com/${author.screen_name}/status/${quoteData.id_str || quoteData.conversation_id_str}' target='_blank' rel='noopener noreferrer'>https://x.com/${
-                        author.screen_name
-                    }/status/${quoteData.id_str || quoteData.conversation_id_str}</a></small>`;
-                }
-                if (showTimestampInDescription) {
-                    quote += '<br><small>' + parseDate(quoteData.created_at);
-                    quote += `</small>`;
+                if (quoteData) {
+                    quoteData.full_text = quoteData.full_text || quoteData.text;
+                    const author = quoteData.user;
+                    quote += '<div class="rsshub-quote">';
                     if (readable) {
                         quote += `<br clear='both' /><div style='clear: both'></div>`;
+                        quote += `<blockquote style='background: #80808010;border-top:1px solid #80808030;border-bottom:1px solid #80808030;margin:0;padding:5px 20px;'>`;
+                    } else {
+                        quote += `<br><br>`;
+                    }
+
+                    if (readable) {
+                        quote += `<a href='https://x.com/${author.screen_name}' target='_blank' rel='noopener noreferrer'>`;
+                    }
+
+                    if (showQuotedAuthorAvatarInDesc) {
+                        quote += `<img width='${sizeOfQuotedAuthorAvatar}' height='${sizeOfQuotedAuthorAvatar}' src='${author.profile_image_url_https}' ${readable ? 'hspace="8" vspace="8" align="left"' : ''}>`;
+                    }
+
+                    if (authorNameBold) {
+                        quote += `<strong>`;
+                    }
+
+                    quote += author.name;
+
+                    if (authorNameBold) {
+                        quote += `</strong>`;
+                    }
+
+                    if (readable) {
+                        quote += `</a>`;
+                    }
+
+                    quote += `:&ensp;`;
+                    quote += formatText(quoteData);
+
+                    if (!readable) {
+                        quote += '<br>';
+                    }
+                    quote += formatMedia(quoteData);
+                    picsPrefix += generatePicsPrefix(quoteData);
+                    quoteInTitle += showEmojiForRetweetAndReply ? ' 💬 ' : (showSymbolForRetweetAndReply ? ' RT ' : '');
+                    quoteInTitle += `${author.name}: ${formatText(quoteData)}`;
+
+                    if (readable) {
+                        quote += `<br><small>Link: <a href='https://x.com/${author.screen_name}/status/${quoteData.id_str || quoteData.conversation_id_str}' target='_blank' rel='noopener noreferrer'>https://x.com/${
+                            author.screen_name
+                        }/status/${quoteData.id_str || quoteData.conversation_id_str}</a></small>`;
+                    }
+                    if (showTimestampInDescription) {
+                        quote += '<br><small>' + parseDate(quoteData.created_at);
+                        quote += `</small>`;
+                        if (readable) {
+                            quote += `<br clear='both' /><div style='clear: both'></div>`;
+                        }
+                    }
+
+                    if (readable) {
+                        quote += `</blockquote>`;
+                    }
+                    quote += '</div>';
+                }
+            }
+
+            // Make title
+            let title = '';
+            if (showAuthorInTitle) {
+                title += originalItem.user?.name + ': ';
+            }
+            const isRetweet = originalItem !== item;
+            const isQuote = item.is_quote_status;
+            if (!isRetweet && (!isQuote || showRetweetTextInTitle)) {
+                if (item.in_reply_to_screen_name) {
+                    title += showEmojiForRetweetAndReply ? '↩️ ' : (showSymbolForRetweetAndReply ? 'Re ' : '');
+                }
+                title += replaceBreak(originalItem.full_text);
+            }
+            if (isRetweet) {
+                title += showEmojiForRetweetAndReply ? '🔁 ' : (showSymbolForRetweetAndReply ? 'RT ' : '');
+                title += item.user.name + ': ';
+                if (item.in_reply_to_screen_name) {
+                    title += showEmojiForRetweetAndReply ? ' ↩️ ' : (showSymbolForRetweetAndReply ? ' Re ' : '');
+                }
+                title += replaceBreak(item.full_text);
+            }
+
+            if (showQuotedInTitle) {
+                title += quoteInTitle;
+            }
+
+            if (showAuthorAsTitleOnly) {
+                title = originalItem.user?.name;
+            }
+
+            // Make description
+            let description = '';
+            if (showAuthorInDesc && showAuthorAvatarInDesc) {
+                description += picsPrefix;
+            }
+            if (isRetweet) {
+                if (showAuthorInDesc) {
+                    if (readable) {
+                        description += '<small>';
+                        description += `<a href='https://x.com/${originalItem.user?.screen_name}' target='_blank' rel='noopener noreferrer'>`;
+                    }
+                    if (authorNameBold) {
+                        description += `<strong>`;
+                    }
+                    description += originalItem.user?.name;
+                    if (authorNameBold) {
+                        description += `</strong>`;
+                    }
+                    if (readable) {
+                        description += '</a>';
+                    }
+                    description += '&ensp;';
+                }
+                description += showEmojiForRetweetAndReply ? '🔁' : (showSymbolForRetweetAndReply ? 'RT' : '');
+                if (!showAuthorInDesc) {
+                    description += '&ensp;';
+                    if (readable) {
+                        description += `<a href='https://x.com/${item.user?.screen_name}' target='_blank' rel='noopener noreferrer'>`;
+                    }
+                    if (authorNameBold) {
+                        description += `<strong>`;
+                    }
+                    description += item.user?.name;
+                    if (authorNameBold) {
+                        description += `</strong>`;
+                    }
+                    if (readable) {
+                        description += '</a>';
                     }
                 }
-
                 if (readable) {
-                    quote += `</blockquote>`;
+                    description += '</small>';
                 }
-                quote += '</div>';
+                description += '<br>';
             }
-        }
-
-        // Make title
-        let title = '';
-        if (showAuthorInTitle) {
-            title += originalItem.user?.name + ': ';
-        }
-        const isRetweet = originalItem !== item;
-        const isQuote = item.is_quote_status;
-        if (!isRetweet && (!isQuote || showRetweetTextInTitle)) {
-            if (item.in_reply_to_screen_name) {
-                title += showEmojiForRetweetAndReply ? '↩️ ' : (showSymbolForRetweetAndReply ? 'Re ' : '');
-            }
-            title += replaceBreak(originalItem.full_text);
-        }
-        if (isRetweet) {
-            title += showEmojiForRetweetAndReply ? '🔁 ' : (showSymbolForRetweetAndReply ? 'RT ' : '');
-            title += item.user.name + ': ';
-            if (item.in_reply_to_screen_name) {
-                title += showEmojiForRetweetAndReply ? ' ↩️ ' : (showSymbolForRetweetAndReply ? ' Re ' : '');
-            }
-            title += replaceBreak(item.full_text);
-        }
-
-        if (showQuotedInTitle) {
-            title += quoteInTitle;
-        }
-
-        if (showAuthorAsTitleOnly) {
-            title = originalItem.user?.name;
-        }
-
-        // Make description
-        let description = '';
-        if (showAuthorInDesc && showAuthorAvatarInDesc) {
-            description += picsPrefix;
-        }
-        if (isRetweet) {
             if (showAuthorInDesc) {
                 if (readable) {
-                    description += '<small>';
-                    description += `<a href='https://x.com/${originalItem.user?.screen_name}' target='_blank' rel='noopener noreferrer'>`;
-                }
-                if (authorNameBold) {
-                    description += `<strong>`;
-                }
-                description += originalItem.user?.name;
-                if (authorNameBold) {
-                    description += `</strong>`;
-                }
-                if (readable) {
-                    description += '</a>';
-                }
-                description += '&ensp;';
-            }
-            description += showEmojiForRetweetAndReply ? '🔁' : (showSymbolForRetweetAndReply ? 'RT' : '');
-            if (!showAuthorInDesc) {
-                description += '&ensp;';
-                if (readable) {
                     description += `<a href='https://x.com/${item.user?.screen_name}' target='_blank' rel='noopener noreferrer'>`;
+                }
+
+                if (showAuthorAvatarInDesc) {
+                    description += `<img width='${sizeOfAuthorAvatar}' height='${sizeOfAuthorAvatar}' src='${item.user.profile_image_url_https}' ${readable ? 'hspace="8" vspace="8" align="left"' : ''}>`;
                 }
                 if (authorNameBold) {
                     description += `<strong>`;
@@ -344,100 +400,89 @@ const ProcessFeed = (ctx, { data = [] }, params = {}) => {
                     description += `</strong>`;
                 }
                 if (readable) {
-                    description += '</a>';
+                    description += `</a>`;
+                }
+                description += `:&ensp;`;
+            }
+            if (item.in_reply_to_screen_name) {
+                description += showEmojiForRetweetAndReply ? '↩️ ' : (showSymbolForRetweetAndReply ? 'Re ' : '');
+            }
+
+            description += item.full_text;
+
+            // Add reply content if enabled
+            if (showReplyContent && item.in_reply_to_screen_name && item.in_reply_to_status_id_str) {
+                const replyTweet = await getReplyTweet(item.in_reply_to_status_id_str, item.in_reply_to_screen_name);
+                if (replyTweet) {
+                    description += '<br><br>';
+                    description += `<blockquote>> ${formatText(replyTweet)}</blockquote>`;
                 }
             }
+            // 从 description 提取 话题作为 category，放在此处是为了避免 匹配到 quote 中的 # 80808030 颜色字符
+            const category = description
+                .match(/(\s)?(#[^\s;<]+)/g)
+                ?.map((e) => e?.match(/#([^\s<]+)/)?.[1])
+                .filter(Boolean);
+            description += img;
+            description += quote;
             if (readable) {
-                description += '</small>';
-            }
-            description += '<br>';
-        }
-        if (showAuthorInDesc) {
-            if (readable) {
-                description += `<a href='https://x.com/${item.user?.screen_name}' target='_blank' rel='noopener noreferrer'>`;
+                description += `<br clear='both' /><div style='clear: both'></div>`;
             }
 
-            if (showAuthorAvatarInDesc) {
-                description += `<img width='${sizeOfAuthorAvatar}' height='${sizeOfAuthorAvatar}' src='${item.user.profile_image_url_https}' ${readable ? 'hspace="8" vspace="8" align="left"' : ''}>`;
+            if (showTimestampInDescription) {
+                if (readable) {
+                    description += `<hr>`;
+                }
+                description += `<small>${parseDate(item.created_at)}</small>`;
             }
-            if (authorNameBold) {
-                description += `<strong>`;
-            }
-            description += item.user?.name;
-            if (authorNameBold) {
-                description += `</strong>`;
-            }
-            if (readable) {
-                description += `</a>`;
-            }
-            description += `:&ensp;`;
-        }
-        if (item.in_reply_to_screen_name) {
-            description += showEmojiForRetweetAndReply ? '↩️ ' : (showSymbolForRetweetAndReply ? 'Re ' : '');
-        }
 
-        description += item.full_text;
-        // 从 description 提取 话题作为 category，放在此处是为了避免 匹配到 quote 中的 # 80808030 颜色字符
-        const category = description.match(/(\s)?(#[^\s;<]+)/g)?.map((e) => e?.match(/#([^\s<]+)/)?.[1]);
-        description += img;
-        description += quote;
-        if (readable) {
-            description += `<br clear='both' /><div style='clear: both'></div>`;
-        }
-
-        if (showTimestampInDescription) {
-            if (readable) {
-                description += `<hr>`;
-            }
-            description += `<small>${parseDate(item.created_at)}</small>`;
-        }
-
-        const link =
-            originalItem.user?.screen_name && (originalItem.id_str || originalItem.conversation_id_str)
-                ? `https://x.com/${originalItem.user?.screen_name}/status/${originalItem.id_str || originalItem.conversation_id_str}`
-                : `https://x.com/${item.user?.screen_name}/status/${item.id_str || item.conversation_id_str}`;
-        return {
-            title,
-            author: [
-                {
-                    name: originalItem.user?.name,
-                    url: `https://x.com/${originalItem.user?.screen_name}`,
-                    avatar: originalItem.user?.profile_image_url_https,
-                },
-            ],
-            description,
-            pubDate: parseDate(item.created_at),
-            link,
-            guid: link.replace('x.com', 'twitter.com'),
-            category,
-            _extra:
-                (isRetweet && {
-                    links: [
-                        {
-                            url: `https://x.com/${item.user?.screen_name || userScreenName}/status/${item.conversation_id_str}`,
-                            type: 'repost',
-                        },
-                    ],
-                }) ||
-                (item.is_quote_status && {
-                    links: [
-                        {
-                            url: `https://x.com/${item.quoted_status?.user?.screen_name}/status/${item.quoted_status?.id_str || item.quoted_status?.conversation_id_str}`,
-                            type: 'quote',
-                        },
-                    ],
-                }) ||
-                (item.in_reply_to_screen_name &&
-                    item.in_reply_to_status_id_str && {
+            const link =
+                originalItem.user?.screen_name && (originalItem.id_str || originalItem.conversation_id_str)
+                    ? `https://x.com/${originalItem.user?.screen_name}/status/${originalItem.id_str || originalItem.conversation_id_str}`
+                    : `https://x.com/${item.user?.screen_name}/status/${item.id_str || item.conversation_id_str}`;
+            return {
+                title,
+                author: [
+                    {
+                        name: originalItem.user?.name,
+                        url: `https://x.com/${originalItem.user?.screen_name}`,
+                        avatar: originalItem.user?.profile_image_url_https,
+                    },
+                ],
+                description,
+                pubDate: parseDate(item.created_at),
+                link,
+                guid: link.replace('x.com', 'twitter.com'),
+                category,
+                _extra:
+                    (isRetweet && {
                         links: [
                             {
-                                url: `https://x.com/${item.in_reply_to_screen_name}/status/${item.in_reply_to_status_id_str}`,
-                                type: 'reply',
+                                url: `https://x.com/${item.user?.screen_name || userScreenName}/status/${item.conversation_id_str}`,
+                                type: 'repost',
                             },
                         ],
-                    }),
-        };
-    });
+                    }) ||
+                    (item.is_quote_status && {
+                        links: [
+                            {
+                                url: `https://x.com/${item.quoted_status?.user?.screen_name}/status/${item.quoted_status?.id_str || item.quoted_status?.conversation_id_str}`,
+                                type: 'quote',
+                            },
+                        ],
+                    }) ||
+                    (item.in_reply_to_screen_name &&
+                        item.in_reply_to_status_id_str && {
+                            links: [
+                                {
+                                    url: `https://x.com/${item.in_reply_to_screen_name}/status/${item.in_reply_to_status_id_str}`,
+                                    type: 'reply',
+                                },
+                            ],
+                        }),
+            };
+        })
+    );
 };
 
 let getAppClient = () => null;

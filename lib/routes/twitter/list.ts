@@ -52,7 +52,7 @@ async function handler(ctx) {
     return {
         title: `Twitter List - ${id}`,
         link: `https://x.com/i/lists/${id}`,
-        item: utils.ProcessFeed(ctx, {
+        item: await utils.ProcessFeed(ctx, {
             data,
         }),
     };

@@ -63,9 +63,9 @@ async function handler(ctx) {
         description: userInfo?.description,
         item:
             data &&
-            utils.ProcessFeed(ctx, {
+            (await utils.ProcessFeed(ctx, {
                 data,
-            }),
+            })),
         allowEmpty: true,
     };
 }
