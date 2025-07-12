@@ -10,6 +10,7 @@ import logger from '@/utils/logger';
 import ofetch from '@/utils/ofetch';
 import proxy from '@/utils/proxy';
 import login from './login';
+import { generateTransactionId } from './transaction';
 
 let authTokenIndex = 0;
 
@@ -134,6 +135,10 @@ export const twitterGot = async (
           )
         : {};
 
+    // 从 URL 中提取路径部分用于生成 transaction ID
+    const urlPath = new URL(url, 'https://x.com').pathname;
+    const transactionId = await generateTransactionId('GET', urlPath);
+
     const response = await ofetch.raw(requestUrl, {
         retry: 0,
         headers: {
@@ -146,6 +151,7 @@ export const twitterGot = async (
             dnt: '1',
             pragma: 'no-cache',
             referer: 'https://x.com/',
+            'x-client-transaction-id': transactionId,
             'x-twitter-active-user': 'yes',
             'x-twitter-client-language': 'en',
             'x-csrf-token': jsonCookie.ct0,
@@ -222,10 +228,19 @@ export const twitterGot = async (
 };
 
 export const paginationTweets = async (endpoint: string, userId: number | undefined, variables: Record<string, any>, path?: string[]) => {
-    const params = {
-        variables: JSON.stringify({ ...variables, userId }),
+    // 按照正常工作URL的参数顺序：variables -> features -> fieldToggles
+    const params: Record<string, string> = {
+        variables: JSON.stringify({ userId, ...variables }),
         features: JSON.stringify(gqlFeatures[endpoint]),
     };
+
+    // 只对特定的端点添加fieldToggles参数
+    const endpointsNeedingFieldToggles = ['UserTweetsAndReplies', 'UserTweets', 'UserMedia', 'SearchTimeline'];
+    if (endpointsNeedingFieldToggles.includes(endpoint)) {
+        params.fieldToggles = JSON.stringify({
+            withArticlePlainText: false,
+        });
+    }
 
     const fetchData = async () => {
         if (config.twitter.thirdPartyApi && thirdPartySupportedAPI.includes(endpoint)) {

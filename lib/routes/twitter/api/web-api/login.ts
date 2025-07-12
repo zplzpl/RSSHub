@@ -2,7 +2,7 @@ import { authenticator } from 'otplib';
 import logger from '@/utils/logger';
 import cache from '@/utils/cache';
 import { RateLimiterMemory, RateLimiterRedis, RateLimiterQueue } from 'rate-limiter-flexible';
-import puppeteer from '@/utils/puppeteer';
+import puppeteer, { getPuppeteerPage } from '@/utils/puppeteer';
 import { CookieJar } from 'tough-cookie';
 
 const loginLimiter = cache.clients.redisClient
@@ -28,11 +28,7 @@ async function login({ username, password, authenticationSecret }) {
         await loginLimiterQueue.removeTokens(1);
 
         const cookieJar = new CookieJar();
-        const browser = await puppeteer({
-            stealth: true,
-        });
-        const page = await browser.newPage();
-        await page.goto('https://x.com/i/flow/login');
+        const { page, browser, destory } = await getPuppeteerPage('https://x.com/i/flow/login');
         await page.waitForSelector('input[autocomplete="username"]');
         await page.type('input[autocomplete="username"]', username);
         const buttons = await page.$$('button');
@@ -65,7 +61,7 @@ async function login({ username, password, authenticationSecret }) {
             });
         });
         const cookieString = await waitForRequest;
-        await browser.close();
+        await destory();
         return cookieString;
     } catch (error) {
         logger.error(`twitter debug: twitter username ${username} login failed:`, error);

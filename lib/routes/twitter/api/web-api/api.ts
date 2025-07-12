@@ -72,7 +72,6 @@ const getUserTweetsAndReplies = (id: string, params?: Record<string, any>) =>
                 includePromotedContent: true,
                 withCommunity: true,
                 withVoice: true,
-                withV2Timeline: true,
             }),
             ['profile-conversation-'],
             id
