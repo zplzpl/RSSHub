@@ -9,8 +9,6 @@ services:
             args:
                 PUPPETEER_SKIP_DOWNLOAD: 1
         restart: always
-        ports:
-            - 1200
         environment:
             NODE_ENV: production
             CACHE_TYPE: redis
