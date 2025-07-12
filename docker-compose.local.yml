@@ -6,6 +6,8 @@ services:
         build:
             context: .
             dockerfile: Dockerfile
+            args:
+                PUPPETEER_SKIP_DOWNLOAD: 1
         restart: always
         ports:
             - 1200
